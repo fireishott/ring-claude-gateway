@@ -11,6 +11,7 @@ _RING_SYSTEM_PROMPT imported at module level.
 
 # ── Ring silent routing classifier ────────────────────────────────────────────
 import subprocess as _sp_r
+import threading as _threading_r
 import uuid as _uuid_r
 
 response = None
@@ -106,32 +107,78 @@ if _last_content and retry_count == 0:
             # OAuth credentials, not the gateway's API key.
             _cc_env = {k: v for k, v in os.environ.items()
                        if k != "ANTHROPIC_API_KEY"}
-            _cr = _sp_r.run(
+
+            # Log superpowers availability and full task
+            _sp_plugin = os.path.expanduser(
+                "~/.claude/plugins/cache/claude-plugins-official"
+            )
+            _sp_ok = os.path.isdir(_sp_plugin)
+            logger.warning(
+                "CC_DISPATCH task=%s superpowers=%s",
+                _ring_task[:120],
+                "YES" if _sp_ok else "NOT_FOUND",
+            )
+
+            # Stream stdout/stderr line-by-line so journalctl shows live
+            # progress instead of one blob at the end.
+            _cc_out_lines: list = []
+            _cc_err_lines: list = []
+
+            def _pipe_reader(_pipe, _lines, _prefix):
+                for _ln in iter(_pipe.readline, ""):
+                    _ln = _ln.rstrip("\n")
+                    if _ln:
+                        logger.warning("%s %s", _prefix, _ln[:300])
+                        _lines.append(_ln)
+                _pipe.close()
+
+            _proc = _sp_r.Popen(
                 [
                     "/home/user/.local/bin/claude-code",  # adjust path
                     "-p", _ring_task,
                     "--dangerously-skip-permissions",
                     "--max-turns", "50",
                 ],
-                capture_output=True,
+                stdout=_sp_r.PIPE,
+                stderr=_sp_r.PIPE,
                 text=True,
-                timeout=600,
                 stdin=_sp_r.DEVNULL,
                 env=_cc_env,
             )
-            logger.warning(
-                "ROUTER_CC_RC=%d out=%s err=%s",
-                _cr.returncode,
-                _cr.stdout.strip()[:100],
-                _cr.stderr.strip()[:80],
+            _t_out = _threading_r.Thread(
+                target=_pipe_reader,
+                args=(_proc.stdout, _cc_out_lines, "CC_OUT:"),
+                daemon=True,
             )
-            _cc_out = _cr.stdout.strip()
+            _t_err = _threading_r.Thread(
+                target=_pipe_reader,
+                args=(_proc.stderr, _cc_err_lines, "CC_ERR:"),
+                daemon=True,
+            )
+            _t_out.start()
+            _t_err.start()
+            try:
+                _proc.wait(timeout=600)
+            except _sp_r.TimeoutExpired:
+                _proc.kill()
+                _t_out.join(timeout=5)
+                _t_err.join(timeout=5)
+                raise
+            _t_out.join()
+            _t_err.join()
+
+            _cc_rc = _proc.returncode
+            _cc_out = "\n".join(_cc_out_lines).strip()
+            logger.warning(
+                "CC_DONE rc=%d lines=%d err_lines=%d",
+                _cc_rc, len(_cc_out_lines), len(_cc_err_lines),
+            )
 
             # Graceful MAX TURNS handling: if the file was written within
             # the last 10 minutes, treat the task as successful even if
             # claude-code hit its turn budget
             if (
-                _cr.returncode != 0
+                _cc_rc != 0
                 and "MAX TURNS" in _cc_out
                 and os.path.exists(_output_path)
                 and (time.time() - os.path.getmtime(_output_path)) < 600
@@ -140,9 +187,9 @@ if _last_content and retry_count == 0:
                     f"Script fixed and saved to `{_output_path}` "
                     "(task completed within turn budget)."
                 )
-                _cr = type(_cr)(returncode=0, stdout=_cc_out, stderr=_cr.stderr)  # type: ignore
+                _cc_rc = 0
 
-            if _cr.returncode == 0 and len(_cc_out) >= 20:
+            if _cc_rc == 0 and len(_cc_out) >= 20:
                 _ring_last_cc_task[_gw_key] = _ring_task
                 _cc_check = _cc_out.replace("-# \U0001f916 claude-code \xb7 claude.ai/pro", "").strip()
                 if "?" in _cc_check[-600:]:
@@ -151,14 +198,14 @@ if _last_content and retry_count == 0:
                 response = _mk_cc_resp(_cc_out + "\n\n-# \U0001f916 claude-code \xb7 claude.ai/pro")
             else:
                 # RC != 0 or empty output — return error directly, never fall to MiniMax
-                logger.warning("ROUTER_CC_FAIL rc=%d", _cr.returncode)
+                logger.warning("CC_FAIL rc=%d", _cc_rc)
                 response = _mk_cc_resp(
-                    f"claude-code exited with an error (rc={_cr.returncode}).\n\n"
+                    f"claude-code exited with an error (rc={_cc_rc}).\n\n"
                     + (_cc_out[:300] if _cc_out else "No output.")
                     + "\n\n-# ⚠️ claude-code \xb7 routing"
                 )
         except _sp_r.TimeoutExpired:
-            logger.warning("ROUTER_CC_TIMEOUT: 600s exceeded")
+            logger.warning("CC_TIMEOUT: 600s exceeded")
             response = _mk_cc_resp(
                 "claude-code timed out (600s) — this task is too large for one pass.\n\n"
                 "Try breaking it into smaller steps, for example:\n"
@@ -168,7 +215,7 @@ if _last_content and retry_count == 0:
                 "\n\n-# ⚠️ claude-code \xb7 routing"
             )
         except Exception as _ex_r:
-            logger.warning("ROUTER_EXCEPTION: %s", str(_ex_r))
+            logger.warning("CC_EXCEPTION: %s", str(_ex_r))
             response = _mk_cc_resp(
                 f"claude-code encountered an error: {str(_ex_r)[:120]}"
                 "\n\n-# ⚠️ claude-code \xb7 routing"
