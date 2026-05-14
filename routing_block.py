@@ -79,6 +79,28 @@ if _last_content and retry_count == 0:
         if "/your/cache/documents/" in _ring_task:
             _ring_task += f" Save corrected version to {_output_path}"
 
+        # Build a response from text — used for success AND errors so MiniMax
+        # never handles a task already routed to claude-code
+        def _mk_cc_resp(_text):
+            if getattr(self, "api_mode", "") == "anthropic_messages":
+                return SimpleNamespace(
+                    id="route-" + str(_uuid_r.uuid4()),
+                    model=self.model,
+                    content=[SimpleNamespace(type="text", text=_text)],
+                    stop_reason="end_turn",
+                    usage=SimpleNamespace(input_tokens=0, output_tokens=0),
+                )
+            return SimpleNamespace(
+                id="route-" + str(_uuid_r.uuid4()),
+                model=self.model,
+                choices=[SimpleNamespace(
+                    index=0,
+                    message=SimpleNamespace(role="assistant", content=_text, tool_calls=None, reasoning_content=None),
+                    finish_reason="stop",
+                )],
+                usage=SimpleNamespace(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            )
+
         try:
             _cr = _sp_r.run(
                 [
@@ -116,47 +138,34 @@ if _last_content and retry_count == 0:
                 _cr = type(_cr)(returncode=0, stdout=_cc_out, stderr=_cr.stderr)  # type: ignore
 
             if _cr.returncode == 0 and len(_cc_out) >= 20:
-                # If claude-code is asking a question, set sticky so the user's
-                # next reply routes back here instead of to the conversational LLM
+                _ring_last_cc_task[_gw_key] = _ring_task
                 _cc_check = _cc_out.replace("-# \U0001f916 claude-code \xb7 claude.ai/pro", "").strip()
                 if "?" in _cc_check[-600:]:
                     _ring_sticky[_sess] = _ring_task
                     logger.warning("RING_STICKY_SET session=%s", _sess)
-                _ro = _cc_out + "\n\n-# \U0001f916 claude-code \xb7 claude.ai/pro"
-
-                # MiniMax uses anthropic_messages transport — needs content list,
-                # not OpenAI-style choices
-                if getattr(self, "api_mode", "") == "anthropic_messages":
-                    response = SimpleNamespace(
-                        id="route-" + str(_uuid_r.uuid4()),
-                        model=self.model,
-                        content=[SimpleNamespace(type="text", text=_ro)],
-                        stop_reason="end_turn",
-                        usage=SimpleNamespace(input_tokens=0, output_tokens=0),
-                    )
-                else:
-                    response = SimpleNamespace(
-                        id="route-" + str(_uuid_r.uuid4()),
-                        model=self.model,
-                        choices=[
-                            SimpleNamespace(
-                                index=0,
-                                message=SimpleNamespace(
-                                    role="assistant",
-                                    content=_ro,
-                                    tool_calls=None,
-                                    reasoning_content=None,
-                                ),
-                                finish_reason="stop",
-                            )
-                        ],
-                        usage=SimpleNamespace(
-                            prompt_tokens=0,
-                            completion_tokens=0,
-                            total_tokens=0,
-                        ),
-                    )
+                response = _mk_cc_resp(_cc_out + "\n\n-# \U0001f916 claude-code \xb7 claude.ai/pro")
+            else:
+                # RC != 0 or empty output — return error directly, never fall to MiniMax
+                logger.warning("ROUTER_CC_FAIL rc=%d", _cr.returncode)
+                response = _mk_cc_resp(
+                    f"claude-code exited with an error (rc={_cr.returncode}).\n\n"
+                    + (_cc_out[:300] if _cc_out else "No output.")
+                    + "\n\n-# ⚠️ claude-code \xb7 routing"
+                )
+        except _sp_r.TimeoutExpired:
+            logger.warning("ROUTER_CC_TIMEOUT: 600s exceeded")
+            response = _mk_cc_resp(
+                "claude-code timed out (600s) — this task is too large for one pass.\n\n"
+                "Try breaking it into smaller steps, for example:\n"
+                "• Phase 1: update block definitions\n"
+                "• Phase 2: fix scheduling / artist pool logic\n"
+                "• Phase 3: anti-rep rules and final cleanup"
+                "\n\n-# ⚠️ claude-code \xb7 routing"
+            )
         except Exception as _ex_r:
             logger.warning("ROUTER_EXCEPTION: %s", str(_ex_r))
-            response = None
+            response = _mk_cc_resp(
+                f"claude-code encountered an error: {str(_ex_r)[:120]}"
+                "\n\n-# ⚠️ claude-code \xb7 routing"
+            )
 # ──────────────────────────────────────────────────────────────────────────────
