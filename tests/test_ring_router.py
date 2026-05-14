@@ -226,3 +226,35 @@ def test_no_sticky_falls_through_to_ring():
     with patch("requests.post", return_value=_mock_ring_resp(body)):
         route, task = _ring_classify("how are you?", "test-key")
     assert route == "minimax"
+
+
+# ── _CC_ALWAYS_R keyword safety net (module-level patterns) ──────────────────
+
+def test_cc_always_matches_build_script():
+    """'build ... script' triggers _CC_ALWAYS_R regardless of Ring."""
+    import run_agent
+    assert run_agent._CC_ALWAYS_R.search("BUILD NEW HIP HOP ESSENTIALS SCRIPT")
+
+
+def test_cc_always_matches_create_script():
+    """'create ... script' triggers _CC_ALWAYS_R."""
+    import run_agent
+    assert run_agent._CC_ALWAYS_R.search("create a playlist automation script")
+
+
+def test_cc_always_matches_write_script():
+    """'write ... script' triggers _CC_ALWAYS_R."""
+    import run_agent
+    assert run_agent._CC_ALWAYS_R.search("write a Python script to scrape this")
+
+
+def test_cc_always_matches_generate_script():
+    """'generate ... script' triggers _CC_ALWAYS_R."""
+    import run_agent
+    assert run_agent._CC_ALWAYS_R.search("generate a bash script for the deploy")
+
+
+def test_cc_always_no_match_casual():
+    """Casual conversation does not trigger _CC_ALWAYS_R."""
+    import run_agent
+    assert not run_agent._CC_ALWAYS_R.search("how are you doing today?")

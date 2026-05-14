@@ -26,7 +26,9 @@ _ring_last_cc_task: dict = {}
 _CC_ALWAYS_R = _re_cc.compile(
     r"\bfix\s+(the\s+)?(script|bug|code|error)\b|"
     r"\brun\s+\S+\.py\b|"
-    r"\blet\s+(him|claude|it)\s+(fix|do|handle|run|update)\b",
+    r"\blet\s+(him|claude|it)\s+(fix|do|handle|run|update)\b|"
+    r"\b(build|create|write|generate)\b.{0,60}\bscript\b|"
+    r"\bcoding\s+task\b",
     _re_cc.IGNORECASE,
 )
 # Patterns that mean claude-code when a prior cc task exists in this channel
@@ -96,7 +98,7 @@ def _ring_classify(last_content: str, openrouter_key: str, prior_text: str = "",
                     # sending full file content that triggers Ring's thinking mode
                     {"role": "user", "content": last_content[:400]},
                 ],
-                "max_tokens": 500,
+                "max_tokens": 1000,
                 "temperature": 0,
             },
             timeout=15,
