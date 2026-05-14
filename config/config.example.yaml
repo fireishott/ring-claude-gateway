@@ -1,0 +1,26 @@
+# ring-claude-gateway — example config snippets for Hermes config.yaml
+#
+# These settings go in ~/.hermes/config.yaml alongside your existing config.
+# Primary model is your conversational LLM (MiniMax, OpenAI, etc.).
+# Ring is NOT set as the primary model — it runs silently as a pre-flight classifier.
+
+model:
+  default: MiniMax-M2.7       # conversational model — Ring routes here by default
+  provider: minimax
+
+fallback_providers:
+  - model: MiniMax-M2.7
+    provider: minimax
+
+# Ring classifier uses OPENROUTER_API_KEY from environment.
+# Add to ~/.hermes/.env (NOT ~/.bashrc — systemd doesn't source it):
+#
+#   OPENROUTER_API_KEY=sk-or-v1-...
+#
+# Ring model: inclusionai/ring-2.6-1t:free  (free tier on OpenRouter)
+# Claude Code: requires Anthropic Pro subscription at claude.ai/pro
+
+agent:
+  max_turns: 15
+  tool_use_enforcement: auto
+  max_output_tokens: 8192
