@@ -1,7 +1,7 @@
 """
 Ring silent routing classifier.
 
-Drop _ring_sticky, _ring_classify(), and _RING_SYSTEM_PROMPT into run_agent.py
+Drop all module-level symbols and _ring_classify() into run_agent.py
 at module level (before class AIAgent), then wire the routing block into
 run_conversation().
 
@@ -10,14 +10,32 @@ Requires: requests, OPENROUTER_API_KEY in environment.
 import json
 import logging
 import os
+import re as _re_cc
 
 import requests
 
 logger = logging.getLogger(__name__)
 
-# session_id → pending_task; set when claude-code asks a question mid-task
-# so the user's reply routes back to claude-code instead of MiniMax
+# session_id → pending_task for mid-task Q&A continuity
 _ring_sticky: dict = {}
+
+# gateway_key → last cc task; stable chat key so context survives /reset
+_ring_last_cc_task: dict = {}
+
+# Patterns that always mean claude-code regardless of Ring's decision
+_CC_ALWAYS_R = _re_cc.compile(
+    r"\bfix\s+(the\s+)?(script|bug|code|error)\b|"
+    r"\brun\s+\S+\.py\b|"
+    r"\blet\s+(him|claude|it)\s+(fix|do|handle|run|update)\b",
+    _re_cc.IGNORECASE,
+)
+# Patterns that mean claude-code when a prior cc task exists in this channel
+_CC_CONTEXT_R = _re_cc.compile(
+    r"\brestart\b|\breboot\b|"
+    r"\bupdate\s+(the\s+)?script\b|"
+    r"\bdeploy\b",
+    _re_cc.IGNORECASE,
+)
 
 _RING_SYSTEM_PROMPT = (
     'You are a routing classifier for an AI assistant.\n'
@@ -36,15 +54,16 @@ _RING_SYSTEM_PROMPT = (
 )
 
 
-def _ring_classify(last_content: str, openrouter_key: str, prior_text: str = "") -> tuple[str, str]:
+def _ring_classify(last_content: str, openrouter_key: str, prior_text: str = "", prior_cc_task: str = "") -> tuple[str, str]:
     """
     Classify a message and return (route, task).
 
     route: "minimax" | "claude-code"
     task:  task string for claude-code, "" otherwise
 
-    prior_text is the last assistant response — gives Ring context to correctly
-    classify follow-ups like "do it again" or "try that again".
+    prior_text: last assistant response — context for follow-ups.
+    prior_cc_task: last claude-code task run in this channel — helps Ring
+    correctly classify repeats like "restart ers" even after /reset.
 
     Always falls back to ("minimax", "") on any error — no message is ever dropped.
     """
@@ -53,6 +72,11 @@ def _ring_classify(last_content: str, openrouter_key: str, prior_text: str = "")
         return ("minimax", "")
     try:
         system = _RING_SYSTEM_PROMPT
+        if prior_cc_task:
+            system += (
+                "\n\nLast claude-code task executed in this channel (may still be relevant):\n"
+                + prior_cc_task[:200]
+            )
         if prior_text:
             system += (
                 "\n\nPrevious assistant response (use for follow-up context):\n"

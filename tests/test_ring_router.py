@@ -138,17 +138,17 @@ def test_prior_text_truncated_to_300_chars():
     with patch("requests.post", return_value=_mock_ring_resp({"route": "minimax"})) as mock_post:
         _ring_classify("do it again", "test-key", prior_text=prior)
     system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
-    # The injected prior text block should contain exactly 300 x's
     assert "x" * 300 in system_msg
     assert "x" * 301 not in system_msg
 
 
 def test_no_prior_text_omits_context_block():
-    """Without prior_text the system prompt is the base prompt only."""
+    """Without prior_text or prior_cc_task the system prompt is the base prompt only."""
     with patch("requests.post", return_value=_mock_ring_resp({"route": "minimax"})) as mock_post:
         _ring_classify("Hello", "test-key")
     system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
     assert "Previous assistant response" not in system_msg
+    assert "Last claude-code task" not in system_msg
 
 
 def test_follow_up_with_prior_dev_context():
@@ -159,6 +159,26 @@ def test_follow_up_with_prior_dev_context():
         route, task = _ring_classify("do it again", "test-key", prior_text=prior)
     assert route == "claude-code"
     assert task != ""
+
+
+def test_prior_cc_task_appended_to_system_prompt():
+    """Last claude-code task is injected so Ring can classify repeat commands."""
+    prior_cc = "Restart ErsatzTV service via Docker API on 192.168.10.10."
+    with patch("requests.post", return_value=_mock_ring_resp({"route": "claude-code", "task": "Restart ErsatzTV again"})) as mock_post:
+        _ring_classify("restart ers", "test-key", prior_cc_task=prior_cc)
+    system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
+    assert "Last claude-code task" in system_msg
+    assert "Restart ErsatzTV service" in system_msg
+
+
+def test_prior_cc_task_truncated_to_200_chars():
+    """prior_cc_task is capped at 200 chars."""
+    prior_cc = "y" * 5000
+    with patch("requests.post", return_value=_mock_ring_resp({"route": "minimax"})) as mock_post:
+        _ring_classify("hello", "test-key", prior_cc_task=prior_cc)
+    system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
+    assert "y" * 200 in system_msg
+    assert "y" * 201 not in system_msg
 
 
 # ── sticky session (mid-task Q&A) ─────────────────────────────────────────────
