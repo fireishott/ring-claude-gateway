@@ -102,6 +102,10 @@ if _last_content and retry_count == 0:
             )
 
         try:
+            # Strip ANTHROPIC_API_KEY so claude-code uses the Pro subscription
+            # OAuth credentials, not the gateway's API key.
+            _cc_env = {k: v for k, v in os.environ.items()
+                       if k != "ANTHROPIC_API_KEY"}
             _cr = _sp_r.run(
                 [
                     "/home/user/.local/bin/claude-code",  # adjust path
@@ -113,6 +117,7 @@ if _last_content and retry_count == 0:
                 text=True,
                 timeout=600,
                 stdin=_sp_r.DEVNULL,
+                env=_cc_env,
             )
             logger.warning(
                 "ROUTER_CC_RC=%d out=%s err=%s",
