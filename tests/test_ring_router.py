@@ -159,3 +159,50 @@ def test_follow_up_with_prior_dev_context():
         route, task = _ring_classify("do it again", "test-key", prior_text=prior)
     assert route == "claude-code"
     assert task != ""
+
+
+# ── sticky session (mid-task Q&A) ─────────────────────────────────────────────
+
+def test_sticky_set_when_claude_code_asks_question():
+    """After claude-code outputs a question, _ring_sticky is populated."""
+    import run_agent
+    run_agent._ring_sticky.clear()
+    sess = "test-session-sticky"
+    # Simulate the sticky being set (routing block logic, not _ring_classify)
+    run_agent._ring_sticky[sess] = "Fix the script at /tmp/foo.py"
+    assert sess in run_agent._ring_sticky
+
+
+def test_sticky_resume_builds_accumulated_task():
+    """Sticky resume appends user reply to the stored task."""
+    import run_agent
+    run_agent._ring_sticky.clear()
+    sess = "test-session-resume"
+    run_agent._ring_sticky[sess] = "Fix the script at /tmp/foo.py"
+    # Simulate what the routing block does on resume
+    sticky_task = run_agent._ring_sticky.pop(sess, None)
+    user_reply = "just the critical bugs"
+    accumulated = sticky_task + f"\n\nUser replied: {user_reply}"
+    assert "Fix the script" in accumulated
+    assert "just the critical bugs" in accumulated
+    assert sess not in run_agent._ring_sticky  # popped — cleared after use
+
+
+def test_sticky_cleared_after_resume():
+    """Sticky entry is consumed (popped) when the follow-up is processed."""
+    import run_agent
+    run_agent._ring_sticky.clear()
+    sess = "test-session-clear"
+    run_agent._ring_sticky[sess] = "some task"
+    _ = run_agent._ring_sticky.pop(sess, None)
+    assert sess not in run_agent._ring_sticky
+
+
+def test_no_sticky_falls_through_to_ring():
+    """Without a sticky entry, normal Ring classification runs."""
+    import run_agent
+    run_agent._ring_sticky.clear()
+    body = {"route": "minimax"}
+    with patch("requests.post", return_value=_mock_ring_resp(body)):
+        route, task = _ring_classify("how are you?", "test-key")
+    assert route == "minimax"

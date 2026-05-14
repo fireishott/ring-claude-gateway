@@ -1,8 +1,9 @@
 """
 Ring silent routing classifier.
 
-Drop _ring_classify() and _RING_SYSTEM_PROMPT into run_agent.py at module level
-(before class AIAgent), then wire the routing block into run_conversation().
+Drop _ring_sticky, _ring_classify(), and _RING_SYSTEM_PROMPT into run_agent.py
+at module level (before class AIAgent), then wire the routing block into
+run_conversation().
 
 Requires: requests, OPENROUTER_API_KEY in environment.
 """
@@ -13,6 +14,10 @@ import os
 import requests
 
 logger = logging.getLogger(__name__)
+
+# session_id → pending_task; set when claude-code asks a question mid-task
+# so the user's reply routes back to claude-code instead of MiniMax
+_ring_sticky: dict = {}
 
 _RING_SYSTEM_PROMPT = (
     'You are a routing classifier for an AI assistant.\n'

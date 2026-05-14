@@ -43,8 +43,6 @@ if _skip_internal:
     _last_content = ""
 
 if _last_content and retry_count == 0:
-    # Pass last assistant reply so Ring can classify follow-ups
-    # like "do it again" or "try that again" correctly
     _prior_text = ""
     for _m in reversed(api_messages):
         if _m.get("role") == "assistant":
@@ -58,9 +56,21 @@ if _last_content and retry_count == 0:
             else:
                 _prior_text = _ac or ""
             break
-    logger.warning("RING_ROUTER_FIRED len=%d prior=%d", len(_last_content), len(_prior_text))
-    _ring_key = os.getenv("OPENROUTER_API_KEY", "")
-    _ring_route, _ring_task = _ring_classify(_last_content, _ring_key, _prior_text)
+
+    # Resume sticky claude-code Q&A session if one is pending,
+    # otherwise classify normally via Ring
+    _sess = getattr(self, "session_id", "") or ""
+    _sticky_task = _ring_sticky.pop(_sess, None)
+    if _sticky_task:
+        # User is answering a question claude-code asked —
+        # skip Ring and route straight back with accumulated context
+        _ring_route = "claude-code"
+        _ring_task = _sticky_task + f"\n\nUser replied: {_last_content}"
+        logger.warning("RING_STICKY_RESUME session=%s", _sess)
+    else:
+        logger.warning("RING_ROUTER_FIRED len=%d prior=%d", len(_last_content), len(_prior_text))
+        _ring_key = os.getenv("OPENROUTER_API_KEY", "")
+        _ring_route, _ring_task = _ring_classify(_last_content, _ring_key, _prior_text)
 
     if _ring_route == "claude-code" and _ring_task:
         # If Ring identified a cached document, append the output path
@@ -106,7 +116,13 @@ if _last_content and retry_count == 0:
                 _cr = type(_cr)(returncode=0, stdout=_cc_out, stderr=_cr.stderr)  # type: ignore
 
             if _cr.returncode == 0 and len(_cc_out) >= 20:
-                _ro = _cc_out + "\n\n-# 🤖 claude-code · claude.ai/pro"
+                # If claude-code is asking a question, set sticky so the user's
+                # next reply routes back here instead of to the conversational LLM
+                _cc_check = _cc_out.replace("-# \U0001f916 claude-code \xb7 claude.ai/pro", "").strip()
+                if "?" in _cc_check[-600:]:
+                    _ring_sticky[_sess] = _ring_task
+                    logger.warning("RING_STICKY_SET session=%s", _sess)
+                _ro = _cc_out + "\n\n-# \U0001f916 claude-code \xb7 claude.ai/pro"
 
                 # MiniMax uses anthropic_messages transport — needs content list,
                 # not OpenAI-style choices
