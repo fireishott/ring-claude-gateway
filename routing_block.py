@@ -43,9 +43,24 @@ if _skip_internal:
     _last_content = ""
 
 if _last_content and retry_count == 0:
-    logger.warning("RING_ROUTER_FIRED len=%d", len(_last_content))
+    # Pass last assistant reply so Ring can classify follow-ups
+    # like "do it again" or "try that again" correctly
+    _prior_text = ""
+    for _m in reversed(api_messages):
+        if _m.get("role") == "assistant":
+            _ac = _m.get("content", "")
+            if isinstance(_ac, list):
+                _prior_text = " ".join(
+                    p.get("text", "")
+                    for p in _ac
+                    if isinstance(p, dict) and p.get("type") == "text"
+                )
+            else:
+                _prior_text = _ac or ""
+            break
+    logger.warning("RING_ROUTER_FIRED len=%d prior=%d", len(_last_content), len(_prior_text))
     _ring_key = os.getenv("OPENROUTER_API_KEY", "")
-    _ring_route, _ring_task = _ring_classify(_last_content, _ring_key)
+    _ring_route, _ring_task = _ring_classify(_last_content, _ring_key, _prior_text)
 
     if _ring_route == "claude-code" and _ring_task:
         # If Ring identified a cached document, append the output path

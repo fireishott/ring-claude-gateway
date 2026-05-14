@@ -2,7 +2,6 @@
 """Tests for Ring silent routing classifier (_ring_classify in run_agent.py)."""
 import json
 
-import pytest
 import requests
 from unittest.mock import MagicMock, patch
 
@@ -119,3 +118,44 @@ def test_reasoning_content_fallback():
         route, task = _ring_classify("Fix this script", "test-key")
     assert route == "claude-code"
     assert task == "Fix /tmp/x.py"
+
+
+# ── prior context (follow-up routing) ────────────────────────────────────────
+
+def test_prior_text_appended_to_system_prompt():
+    """Prior assistant text is injected into the system prompt for follow-up context."""
+    prior = "ErsatzTV restarted successfully via Docker API."
+    with patch("requests.post", return_value=_mock_ring_resp({"route": "claude-code", "task": "Restart ErsatzTV again"})) as mock_post:
+        _ring_classify("do it again", "test-key", prior_text=prior)
+    system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
+    assert "ErsatzTV restarted successfully" in system_msg
+    assert "Previous assistant response" in system_msg
+
+
+def test_prior_text_truncated_to_300_chars():
+    """Prior text is capped at 300 chars to keep Ring's token budget small."""
+    prior = "x" * 5000
+    with patch("requests.post", return_value=_mock_ring_resp({"route": "minimax"})) as mock_post:
+        _ring_classify("do it again", "test-key", prior_text=prior)
+    system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
+    # The injected prior text block should contain exactly 300 x's
+    assert "x" * 300 in system_msg
+    assert "x" * 301 not in system_msg
+
+
+def test_no_prior_text_omits_context_block():
+    """Without prior_text the system prompt is the base prompt only."""
+    with patch("requests.post", return_value=_mock_ring_resp({"route": "minimax"})) as mock_post:
+        _ring_classify("Hello", "test-key")
+    system_msg = mock_post.call_args[1]["json"]["messages"][0]["content"]
+    assert "Previous assistant response" not in system_msg
+
+
+def test_follow_up_with_prior_dev_context():
+    """'do it again' with a prior dev-task response routes to claude-code."""
+    prior = "ErsatzTV restarted successfully via Docker API on 192.168.10.10."
+    body = {"route": "claude-code", "task": "Restart ErsatzTV again using Docker API"}
+    with patch("requests.post", return_value=_mock_ring_resp(body)):
+        route, task = _ring_classify("do it again", "test-key", prior_text=prior)
+    assert route == "claude-code"
+    assert task != ""

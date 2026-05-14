@@ -31,12 +31,15 @@ _RING_SYSTEM_PROMPT = (
 )
 
 
-def _ring_classify(last_content: str, openrouter_key: str) -> tuple[str, str]:
+def _ring_classify(last_content: str, openrouter_key: str, prior_text: str = "") -> tuple[str, str]:
     """
     Classify a message and return (route, task).
 
     route: "minimax" | "claude-code"
     task:  task string for claude-code, "" otherwise
+
+    prior_text is the last assistant response — gives Ring context to correctly
+    classify follow-ups like "do it again" or "try that again".
 
     Always falls back to ("minimax", "") on any error — no message is ever dropped.
     """
@@ -44,6 +47,12 @@ def _ring_classify(last_content: str, openrouter_key: str) -> tuple[str, str]:
         logger.warning("RING_ROUTER_ERR type=no_key detail=OPENROUTER_API_KEY not set")
         return ("minimax", "")
     try:
+        system = _RING_SYSTEM_PROMPT
+        if prior_text:
+            system += (
+                "\n\nPrevious assistant response (use for follow-up context):\n"
+                + prior_text[:300]
+            )
         resp = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
             headers={
@@ -53,7 +62,7 @@ def _ring_classify(last_content: str, openrouter_key: str) -> tuple[str, str]:
             json={
                 "model": "inclusionai/ring-2.6-1t:free",
                 "messages": [
-                    {"role": "system", "content": _RING_SYSTEM_PROMPT},
+                    {"role": "system", "content": system},
                     # 400 chars is enough to see attachment headers without
                     # sending full file content that triggers Ring's thinking mode
                     {"role": "user", "content": last_content[:400]},
