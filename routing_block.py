@@ -145,6 +145,10 @@ if _last_content and retry_count == 0:
                     return _l[:80]
                 return None
 
+            # Grab progress_callback once — feeds the Discord progress queue
+            # (same mechanism as tool-use bubbles, ~1.5s delivery to Discord).
+            _cc_progress_cb = getattr(self, "tool_progress_callback", None)
+
             def _pipe_reader(_pipe, _lines, _prefix):
                 for _ln in iter(_pipe.readline, ""):
                     _ln = _ln.rstrip("\n")
@@ -154,8 +158,21 @@ if _last_content and retry_count == 0:
                     _lines.append(_ln)
                     if _prefix == "CC_OUT:":
                         _hint = _cc_activity_hint(_ln)
-                        if _hint and hasattr(self, "_touch_activity"):
-                            self._touch_activity(f"claude-code: {_hint}")
+                        if _hint:
+                            # Update "Still working..." heartbeat
+                            if hasattr(self, "_touch_activity"):
+                                self._touch_activity(f"claude-code: {_hint}")
+                            # Push directly to progress queue →
+                            # Discord edit within ~1.5s (real-time)
+                            if _cc_progress_cb:
+                                try:
+                                    _cc_progress_cb(
+                                        event_type="tool.started",
+                                        tool_name="claude-code",
+                                        preview=_hint,
+                                    )
+                                except Exception:
+                                    pass
                 _pipe.close()
 
             _proc = _sp_r.Popen(
