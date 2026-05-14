@@ -120,16 +120,42 @@ if _last_content and retry_count == 0:
             )
 
             # Stream stdout/stderr line-by-line so journalctl shows live
-            # progress instead of one blob at the end.
+            # progress and Discord heartbeats get real claude-code activity text.
             _cc_out_lines: list = []
             _cc_err_lines: list = []
+
+            # Point the agent's activity fields at claude-code so the
+            # "Still working..." heartbeat shows what's actually happening.
+            if hasattr(self, "_current_tool"):
+                self._current_tool = "claude-code"
+            if hasattr(self, "_touch_activity"):
+                self._touch_activity("claude-code: starting task")
+
+            def _cc_activity_hint(_ln):
+                """Return a short Discord-friendly status for a cc output line."""
+                _l = _ln.strip()
+                if "superpowers:" in _l or _l.startswith("Using "):
+                    return _l[:80]
+                for _kw in ("Reading", "Writing", "Edit", "Bash", "Search",
+                            "Analyzing", "Building", "Planning", "Implementing",
+                            "Testing", "Fixing", "Creating", "Saving"):
+                    if _l.startswith(_kw):
+                        return _l[:80]
+                if _l and _l[0] in ("✓", "●", "⚡", "→", "▶"):
+                    return _l[:80]
+                return None
 
             def _pipe_reader(_pipe, _lines, _prefix):
                 for _ln in iter(_pipe.readline, ""):
                     _ln = _ln.rstrip("\n")
-                    if _ln:
-                        logger.warning("%s %s", _prefix, _ln[:300])
-                        _lines.append(_ln)
+                    if not _ln:
+                        continue
+                    logger.warning("%s %s", _prefix, _ln[:300])
+                    _lines.append(_ln)
+                    if _prefix == "CC_OUT:":
+                        _hint = _cc_activity_hint(_ln)
+                        if _hint and hasattr(self, "_touch_activity"):
+                            self._touch_activity(f"claude-code: {_hint}")
                 _pipe.close()
 
             _proc = _sp_r.Popen(
@@ -166,6 +192,9 @@ if _last_content and retry_count == 0:
                 raise
             _t_out.join()
             _t_err.join()
+
+            if hasattr(self, "_current_tool"):
+                self._current_tool = None
 
             _cc_rc = _proc.returncode
             _cc_out = "\n".join(_cc_out_lines).strip()
